@@ -13,11 +13,19 @@
 
 #define ASP_CMDRESP_RESPONSE (1 << 31)
 
+
+struct sev_init {
+	uint32_t enable_es; 	/* In */
+	uint32_t reserved;		/* - */
+	uint64_t tmr_paddr;		/* In */
+	uint32_t tmr_length;	/* In */
+} __packed;
+
 struct sev_platform_status {
-	uint8_t 	api_major;
-	uint8_t 	api_minor;
-	uint8_t 	state;
-	uint8_t 	owner;
-	uint32_t 	cfges_build;
-	uint32_t 	guest_count;
+	uint8_t 	api_major;		/* Out */
+	uint8_t 	api_minor;		/* Out */
+	uint8_t 	state;			/* Out */
+	uint8_t 	owner;			/* Out */
+	uint32_t 	cfges_build;	/* Out */
+	uint32_t 	guest_count;	/* Out */
 } __packed;

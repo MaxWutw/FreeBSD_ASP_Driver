@@ -48,6 +48,7 @@ struct pciid {
 	{ 0x00000000, NULL }
 };
 
+int sev_init(struct asp_softc *sc);
 int sev_get_platform_status(struct asp_softc *sc);
 
 
@@ -143,6 +144,8 @@ asp_attach(device_t dev)
 
 	device_printf(dev, "Memory mapped at physical address: 0x%lx\n", rman_get_start(sc->pci_resource));
 
+	sev_init(sc);
+
 	/* Test for get SEV platform status */
 	// struct sev_platform_status *status;
 	error = sev_get_platform_status(sc);
@@ -209,7 +212,28 @@ asp_send_cmd(struct asp_softc *sc, uint32_t cmd, uint64_t paddr)
 int
 sev_init(struct asp_softc *sc)
 {
+	struct sev_init *init;
+	int error;
 
+	init = contigmalloc(sizeof(struct sev_init), M_DEVBUF, M_NOWAIT | M_ZERO,
+						0, ~0UL, PAGE_SIZE, 0);
+	if (init == NULL) {
+		return (ENOMEM);
+	}
+	
+	/* For AMD SEV, currently we does not enable SEV-ES */
+	bzero(init, sizeof(struct sev_init));
+	uint64_t paddr = vtophys(init);
+	device_printf(sc->dev, "SEV init physical address: 0x%lx\n", paddr);
+
+	error = asp_send_cmd(sc, SEV_CMD_INIT, paddr);
+	if (error)
+		return (error);
+
+	device_printf(sc->dev, "SEV init finished!\n");
+	contigfree(init, sizeof(struct sev_init), M_DEVBUF);
+
+	return (0);
 }
 
 int
@@ -225,7 +249,7 @@ sev_get_platform_status(struct asp_softc *sc)
 	}
 
 	uint64_t paddr = vtophys(status_data);
-	device_printf(sc->dev, "Physical address: 0x%lx\n", paddr);
+	device_printf(sc->dev, "Platform status physical address: 0x%lx\n", paddr);
 
 	error = asp_send_cmd(sc, SEV_CMD_PLATFORM_STATUS, paddr);
 	if (error)
