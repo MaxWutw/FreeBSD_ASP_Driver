@@ -4,12 +4,19 @@
 #include <sys/systm.h>
 #include <sys/bus.h>
 #include <sys/rman.h>
+#include <sys/types.h>
+#include <sys/malloc.h>
 
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
 
 #include <machine/bus.h>
 #include <machine/resource.h>
+
+#include <vm/vm.h>
+#include <vm/pmap.h>
+
+#include "asp.h"
 
 struct asp_softc {
 	device_t dev;
@@ -27,6 +34,10 @@ struct asp_softc {
 	struct resource *pci_resource_msix;
 	*/
 
+	/* ASP register */
+	bus_size_t		reg_cmdresp;
+	bus_size_t		reg_addr_lo;
+	bus_size_t		reg_addr_hi;
 };
 
 struct pciid {
@@ -36,6 +47,9 @@ struct pciid {
 	{ 0x14861022, "AMD Secure Processor (Milan)" },
 	{ 0x00000000, NULL }
 };
+
+int sev_get_platform_status(struct asp_softc *sc);
+
 
 static int
 asp_probe(device_t dev)
@@ -107,6 +121,10 @@ asp_attach(device_t dev)
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
+	/* softc get base register */
+	sc->reg_cmdresp = ASP_REG_CMDRESP;
+	sc->reg_addr_lo  = ASP_REG_ADDR_LO;
+	sc->reg_addr_hi  = ASP_REG_ADDR_HI;
 
 	error = asp_map_pci_bar(dev);
 	if (error != 0) {
@@ -125,6 +143,14 @@ asp_attach(device_t dev)
 
 	device_printf(dev, "Memory mapped at physical address: 0x%lx\n", rman_get_start(sc->pci_resource));
 
+	/* Test for get SEV platform status */
+	// struct sev_platform_status *status;
+	error = sev_get_platform_status(sc);
+	if (error != 0) {
+		device_printf(dev, "%s: Failed to get SEV platform status\n", __func__);
+		goto out;
+	}
+
 out:
 	if (error != 0) {
 		
@@ -141,6 +167,77 @@ asp_detach(device_t dev)
 	
 	pci_disable_busmaster(dev);
 	asp_ummap_pci_bar(dev);
+	return (0);
+}
+
+static int
+asp_send_cmd(struct asp_softc *sc, uint32_t cmd, uint64_t paddr)
+{
+	uint32_t reg_val, paddr_hi, paddr_lo, cmd_id;
+	// for non blocking mode
+	int32_t timeout = 1000;
+
+	paddr_lo = paddr & 0xffffffff;
+	paddr_hi = (paddr >> 32) & 0xffffffff;
+	cmd_id = (cmd & 0x3ff) << 16;
+	device_printf(sc->dev, "High address: 0x%x\n", paddr_hi);
+	device_printf(sc->dev, "Low address: 0x%x\n", paddr_lo);
+
+	bus_write_4(sc->pci_resource, sc->reg_addr_lo, paddr_lo);
+	bus_write_4(sc->pci_resource, sc->reg_addr_hi, paddr_hi);
+	bus_write_4(sc->pci_resource, sc->reg_cmdresp, cmd_id);
+
+	/* busy waiting polling (temporarily) */
+	while (timeout > -1) {
+		reg_val = bus_read_4(sc->pci_resource, sc->reg_cmdresp);
+		if (reg_val & ASP_CMDRESP_RESPONSE)
+			break;
+		DELAY(5000);
+		timeout--;
+	}
+
+	if (timeout == 0) {
+		device_printf(sc->dev, "ASP Command Timeout!\n");
+		return (ETIMEDOUT);
+	}
+
+	device_printf(sc->dev, "ASP Command finished. Result: 0x%x\n", reg_val);
+	device_printf(sc->dev, "Timeout left: %d\n", timeout);
+	return (0);
+}
+
+int
+sev_init(struct asp_softc *sc)
+{
+
+}
+
+int
+sev_get_platform_status(struct asp_softc *sc)
+{
+	struct sev_platform_status *status_data;
+	int error;
+
+	status_data = contigmalloc(sizeof(struct sev_platform_status), M_DEVBUF, M_NOWAIT | M_ZERO,
+							   0, ~0UL, PAGE_SIZE, 0);
+	if (status_data == NULL) {
+		return (ENOMEM);
+	}
+
+	uint64_t paddr = vtophys(status_data);
+	device_printf(sc->dev, "Physical address: 0x%lx\n", paddr);
+
+	error = asp_send_cmd(sc, SEV_CMD_PLATFORM_STATUS, paddr);
+	if (error)
+		return (error);
+
+	device_printf(sc->dev, "SEV status:\n");
+	device_printf(sc->dev, "	API version: %d.%d\n", status_data->api_major, status_data->api_minor);
+	device_printf(sc->dev, "	State: %d\n", status_data->state);
+	device_printf(sc->dev, "	Guests: %d\n", status_data->guest_count);
+	
+	contigfree(status_data, sizeof(struct sev_platform_status), M_DEVBUF);
+
 	return (0);
 }
 
