@@ -49,6 +49,7 @@ struct pciid {
 };
 
 int sev_init(struct asp_softc *sc);
+int sev_shutdown(struct asp_softc *sc);
 int sev_get_platform_status(struct asp_softc *sc);
 
 
@@ -154,6 +155,13 @@ asp_attach(device_t dev)
 		goto out;
 	}
 
+	sev_shutdown(sc);
+	error = sev_get_platform_status(sc);
+	if (error != 0) {
+		device_printf(dev, "%s: Failed to get SEV platform status\n", __func__);
+		goto out;
+	}
+
 out:
 	if (error != 0) {
 		
@@ -232,6 +240,18 @@ sev_init(struct asp_softc *sc)
 
 	device_printf(sc->dev, "SEV init finished!\n");
 	contigfree(init, sizeof(struct sev_init), M_DEVBUF);
+
+	return (0);
+}
+
+int
+sev_shutdown(struct asp_softc *sc)
+{
+	int error;
+
+	error = asp_send_cmd(sc, SEV_CMD_SHUTDOWN, 0x0);
+	if (error)
+		return (error);
 
 	return (0);
 }
