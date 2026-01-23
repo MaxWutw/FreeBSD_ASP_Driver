@@ -14,9 +14,6 @@
 #include <machine/bus.h>
 #include <machine/resource.h>
 
-#include <vm/vm.h>
-#include <vm/pmap.h>
-
 #include "asp.h"
 
 struct asp_softc {
@@ -70,6 +67,7 @@ struct pciid {
 	{ 0x14861022, "AMD Secure Processor (Milan)" },
 	{ 0x00000000, NULL }
 };
+static int asp_detach(device_t dev);
 int sev_init(struct asp_softc *sc);
 int sev_shutdown(struct asp_softc *sc);
 int sev_get_platform_status(struct asp_softc *sc);
@@ -175,6 +173,8 @@ asp_attach(device_t dev)
 	sc->reg_inten	= PSP_REG_INTEN;
 	sc->reg_intsts 	= PSP_REG_INTSTS;
 
+	mtx_init(&sc->mtx_lock, "asp", NULL, MTX_DEF);
+
 	error = asp_map_pci_bar(dev);
 	if (error != 0) {
 		device_printf(sc->dev, "%s: Failed to map BAR(s)\n", __func__);
@@ -195,7 +195,7 @@ asp_attach(device_t dev)
 		goto fail;
 	}
 
-	sc->irq_rid = 0;
+	sc->irq_rid = 1;
 	sc->irq_res = bus_alloc_resource_any(sc->dev, SYS_RES_IRQ, &sc->irq_rid, RF_ACTIVE | RF_SHAREABLE);
 	error = bus_setup_intr(sc->dev, sc->irq_res,
 			INTR_TYPE_MISC | INTR_MPSAFE, NULL, asp_intr_handler,
@@ -261,10 +261,10 @@ asp_attach(device_t dev)
 		goto fail;
 	}
 
-	sev_init(sc);
-
 	/* Enable ASP interrupt */
 	bus_write_4(sc->pci_resource, sc->reg_inten, -1);
+
+	error = sev_init(sc);
 
 	/* Test for get SEV platform status */
 	// struct sev_platform_status *status;
@@ -283,7 +283,7 @@ asp_attach(device_t dev)
 
 fail:
 	if (error != 0) {
-
+		asp_detach(dev);
 	}
 
 	return (error);
@@ -298,12 +298,15 @@ asp_detach(device_t dev)
 
 	bus_generic_detach(dev);
 	pci_disable_busmaster(dev);
-	asp_ummap_pci_bar(dev);
 	if (sc->irq_tag != NULL)
-		bus_teardown_intr(sc->dev, sc->pci_resource_msix, sc->irq_tag);
+		bus_teardown_intr(sc->dev, sc->irq_res, sc->irq_tag);
 
 	if (sc->irq_res != NULL)
 		bus_release_resource(sc->dev, SYS_RES_IRQ, sc->irq_rid, sc->irq_res);
+
+	pci_release_msi(sc->dev);
+
+	asp_ummap_pci_bar(dev);
 
 	if (sc->cmd_dma_map != 0)
 		bus_dmamap_unload(sc->cmd_dma_tag, sc->cmd_dma_map);
@@ -316,6 +319,8 @@ asp_detach(device_t dev)
 
 	if (sc->parent_dma_tag != 0)
 		bus_dma_tag_destroy(sc->parent_dma_tag);
+
+	mtx_destroy(&sc->mtx_lock);
 	
 	return (0);
 }
