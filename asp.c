@@ -1,6 +1,7 @@
 #include <sys/param.h>
 #include <sys/module.h>
 #include <sys/kernel.h>
+#include <sys/mutex.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
 #include <sys/rman.h>
@@ -30,15 +31,18 @@ struct asp_softc {
 	bus_space_handle_t 	pci_bus_handle;
 
 	/* Secondary BAR (RID 5) apparently used for MSI-X */
-	/*
 	int	pci_resource_id_msix;
 	struct resource *pci_resource_msix;
-	*/
+	int	 irq_rid;
+	struct resource *irq_res;
+	void *irq_tag;
 
 	/* ASP register */
 	bus_size_t		reg_cmdresp;
 	bus_size_t		reg_addr_lo;
 	bus_size_t		reg_addr_hi;
+	bus_size_t		reg_inten;
+	bus_size_t		reg_intsts;
 
 	/* DMA Resources */
 	bus_dma_tag_t 	parent_dma_tag;
@@ -47,9 +51,16 @@ struct asp_softc {
 	void			*cmd_kva;
 	bus_addr_t		cmd_paddr;
 
-	/* TMR Resources */
+	/* TMR Resources, currently disabled */
+	/*
+	size_t			tmr_size;
+	bus_dma_tag_t 	tmr_dma_tag;
+	bus_dmamap_t 	tmr_dma_map;
+	void			*tmr_kva;
+	bus_addr_t		tmr_paddr;
+	*/
 
-	struct mtx lock;
+	struct mtx mtx_lock;
 };
 
 struct pciid {
@@ -59,7 +70,6 @@ struct pciid {
 	{ 0x14861022, "AMD Secure Processor (Milan)" },
 	{ 0x00000000, NULL }
 };
-
 int sev_init(struct asp_softc *sc);
 int sev_shutdown(struct asp_softc *sc);
 int sev_get_platform_status(struct asp_softc *sc);
@@ -94,14 +104,13 @@ asp_map_pci_bar(device_t dev)
 		return (ENODEV);
 	}
 
-	/*
 	sc->pci_resource_id_msix = PCIR_BAR(5);
 	sc->pci_resource_msix = bus_alloc_resource_any(dev, SYS_RES_MEMORY,
-		&sc->pci_resource_id_msix, RF_ACTIVATE);
+		&sc->pci_resource_id_msix, RF_ACTIVE);
 	if (sc->pci_resource_msix == NULL) {
 		device_printf(dev, "unable to allocate pci resource\n");
+		return (ENODEV);
 	}
-	*/
 
 	sc->pci_bus_tag = rman_get_bustag(sc->pci_resource);
 	sc->pci_bus_handle = rman_get_bushandle(sc->pci_resource);
@@ -115,14 +124,29 @@ asp_ummap_pci_bar(device_t dev)
 
 	sc = device_get_softc(dev);
 	
-	/*
 	bus_release_resource(dev, SYS_RES_MEMORY, sc->pci_resource_id_msix,
 		sc->pci_resource_msix);
-	*/	
 	bus_release_resource(dev, SYS_RES_MEMORY, sc->pci_resource_id,
 		sc->pci_resource);
 	
 	return (0);
+}
+
+static void
+asp_intr_handler(void *arg)
+{
+	struct asp_softc *sc = arg;
+	uint32_t status;
+
+	mtx_lock(&sc->mtx_lock);
+
+	status = bus_read_4(sc->pci_resource, sc->reg_intsts);
+	bus_write_4(sc->pci_resource, sc->reg_intsts, status);
+	if (status & ASP_CMDRESP_COMPLETE) {
+		wakeup(sc);
+	}
+
+	mtx_unlock(&sc->mtx_lock);
 }
 
 static void 
@@ -139,25 +163,48 @@ asp_attach(device_t dev)
 	struct asp_softc *sc;
 	uint32_t val;
 	int error;
+	int msixc;
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
+
 	/* softc get base register */
 	sc->reg_cmdresp = ASP_REG_CMDRESP;
-	sc->reg_addr_lo  = ASP_REG_ADDR_LO;
-	sc->reg_addr_hi  = ASP_REG_ADDR_HI;
+	sc->reg_addr_lo = ASP_REG_ADDR_LO;
+	sc->reg_addr_hi = ASP_REG_ADDR_HI;
+	sc->reg_inten	= PSP_REG_INTEN;
+	sc->reg_intsts 	= PSP_REG_INTSTS;
 
 	error = asp_map_pci_bar(dev);
 	if (error != 0) {
-		device_printf(dev, "%s: couldn't map BAR(s)\n", __func__);
+		device_printf(sc->dev, "%s: Failed to map BAR(s)\n", __func__);
 		goto fail;
 	}
 
 	error = pci_enable_busmaster(dev);
 	if (error != 0) {
-		device_printf(dev, "%s: couldn't enable busmaster\n", __func__);
+		device_printf(sc->dev, "%s: Failed to enable busmaster\n", __func__);
 		goto fail;
 	}
+
+	/* Setup MSI-X */
+	msixc = 1;
+	error = pci_alloc_msix(sc->dev, &msixc);
+	if (error != 0) {
+		device_printf(sc->dev, "%s: Failed to alloccate IRQ resource\n", __func__);
+		goto fail;
+	}
+
+	sc->irq_rid = 0;
+	sc->irq_res = bus_alloc_resource_any(sc->dev, SYS_RES_IRQ, &sc->irq_rid, RF_ACTIVE | RF_SHAREABLE);
+	error = bus_setup_intr(sc->dev, sc->irq_res,
+			INTR_TYPE_MISC | INTR_MPSAFE, NULL, asp_intr_handler,
+			sc, &sc->irq_tag);
+	if (error != 0) {
+		device_printf(sc->dev, "%s: Failed to setup interrupt handler\n", __func__);
+		goto fail;
+	}
+
 	
 	val = bus_read_4(sc->pci_resource, 0x00);
 	device_printf(dev, "ASP Hardware found! Reg[0x00] = 0x%08x\n", val);
@@ -182,7 +229,8 @@ asp_attach(device_t dev)
 		goto fail;
 	}
 
-	/* Allocate map for command buffer */
+
+	/* Allocate DMA for command buffer */
 	error = bus_dma_tag_create(sc->parent_dma_tag,
 			PAGE_SIZE,
 			0,
@@ -215,6 +263,9 @@ asp_attach(device_t dev)
 
 	sev_init(sc);
 
+	/* Enable ASP interrupt */
+	bus_write_4(sc->pci_resource, sc->reg_inten, -1);
+
 	/* Test for get SEV platform status */
 	// struct sev_platform_status *status;
 	error = sev_get_platform_status(sc);
@@ -232,8 +283,9 @@ asp_attach(device_t dev)
 
 fail:
 	if (error != 0) {
-		
+
 	}
+
 	return (error);
 }
 
@@ -247,6 +299,11 @@ asp_detach(device_t dev)
 	bus_generic_detach(dev);
 	pci_disable_busmaster(dev);
 	asp_ummap_pci_bar(dev);
+	if (sc->irq_tag != NULL)
+		bus_teardown_intr(sc->dev, sc->pci_resource_msix, sc->irq_tag);
+
+	if (sc->irq_res != NULL)
+		bus_release_resource(sc->dev, SYS_RES_IRQ, sc->irq_rid, sc->irq_res);
 
 	if (sc->cmd_dma_map != 0)
 		bus_dmamap_unload(sc->cmd_dma_tag, sc->cmd_dma_map);
@@ -264,11 +321,41 @@ asp_detach(device_t dev)
 }
 
 static int
+asp_wait(struct asp_softc *sc, uint32_t *status, int poll)
+{
+	int timeout = 1000, error;
+
+	/* Polling */
+	if (poll) {
+		while (timeout > -1) {
+			*status = bus_read_4(sc->pci_resource, sc->reg_cmdresp);
+			if (*status & ASP_CMDRESP_RESPONSE)
+				return (0);
+			DELAY(5000);
+			timeout--;
+		}
+
+		if (timeout == 0) {
+			device_printf(sc->dev, "ASP Command Timeout!\n");
+			return (ETIMEDOUT);
+		}
+	}
+	error = msleep(sc, &sc->mtx_lock, PWAIT, "asp", 2 * hz);
+	if (error)
+		return (error);
+
+	*status = bus_read_4(sc->pci_resource, sc->reg_cmdresp);
+	device_printf(sc->dev, "ASP Command finished. Result: 0x%x\n", *status);
+	device_printf(sc->dev, "Timeout left: %d\n", timeout);
+	
+	return (0);
+}
+
+static int
 asp_send_cmd(struct asp_softc *sc, uint32_t cmd, uint64_t paddr)
 {
-	uint32_t reg_val, paddr_hi, paddr_lo, cmd_id;
-	// for non blocking mode
-	int32_t timeout = 1000;
+	uint32_t paddr_hi, paddr_lo, cmd_id, status;
+	int error;
 
 	paddr_lo = paddr & 0xffffffff;
 	paddr_hi = (paddr >> 32) & 0xffffffff;
@@ -276,26 +363,28 @@ asp_send_cmd(struct asp_softc *sc, uint32_t cmd, uint64_t paddr)
 	device_printf(sc->dev, "High address: 0x%x\n", paddr_hi);
 	device_printf(sc->dev, "Low address: 0x%x\n", paddr_lo);
 
+	/* nonzero if we are doing a cold boot */
+	if (!cold)
+		cmd_id |= ASP_CMDRESP_IOC;
+
+	mtx_lock(&sc->mtx_lock);
+
 	bus_write_4(sc->pci_resource, sc->reg_addr_lo, paddr_lo);
 	bus_write_4(sc->pci_resource, sc->reg_addr_hi, paddr_hi);
 	bus_write_4(sc->pci_resource, sc->reg_cmdresp, cmd_id);
 
-	/* busy waiting polling (temporarily) */
-	while (timeout > -1) {
-		reg_val = bus_read_4(sc->pci_resource, sc->reg_cmdresp);
-		if (reg_val & ASP_CMDRESP_RESPONSE)
-			break;
-		DELAY(5000);
-		timeout--;
+	error = asp_wait(sc, &status, cold);
+
+	mtx_unlock(&sc->mtx_lock);
+	if (error)
+		return (error);
+
+	if (status & ASP_CMDRESP_RESPONSE) {
+		if ((status & SEV_STATUS_MASK) != SEV_STATUS_SUCCESS) {
+			return (EIO);
+		}
 	}
 
-	if (timeout == 0) {
-		device_printf(sc->dev, "ASP Command Timeout!\n");
-		return (ETIMEDOUT);
-	}
-
-	device_printf(sc->dev, "ASP Command finished. Result: 0x%x\n", reg_val);
-	device_printf(sc->dev, "Timeout left: %d\n", timeout);
 	return (0);
 }
 
