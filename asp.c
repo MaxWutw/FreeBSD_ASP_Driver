@@ -70,7 +70,14 @@ struct pciid {
 static int asp_detach(device_t dev);
 int sev_init(struct asp_softc *sc);
 int sev_shutdown(struct asp_softc *sc);
-int sev_get_platform_status(struct asp_softc *sc);
+int sev_get_platform_status(struct asp_softc *sc, struct sev_platform_status *pstatus);
+int sev_decommission(struct asp_softc *sc, struct sev_decommission *arg);
+int sev_launch_start(struct asp_softc *sc, struct sev_launch_start *gstatus);
+int sev_get_guest_status(struct asp_softc *sc, struct sev_guest_status *gstatus);
+int sev_launch_update_data(struct asp_softc *sc, struct sev_launch_update_data *gludata);
+int sev_launch_finish(struct asp_softc *sc, struct sev_launch_finish *gfinish);
+int sev_activate(struct asp_softc *sc, struct sev_activate *gactivate);
+int sev_deactivate(struct asp_softc *sc, struct sev_deactivate *gdeactivate);
 
 static int
 asp_probe(device_t dev)
@@ -267,19 +274,27 @@ asp_attach(device_t dev)
 	error = sev_init(sc);
 
 	/* Test for get SEV platform status */
-	// struct sev_platform_status *status;
-	error = sev_get_platform_status(sc);
+	struct sev_platform_status *pstatus = NULL;
+	error = sev_get_platform_status(sc, pstatus);
 	if (error != 0) {
 		device_printf(dev, "%s: Failed to get SEV platform status\n", __func__);
 		goto fail;
 	}
+	device_printf(sc->dev, "SEV status:\n");
+	device_printf(sc->dev, "	API version: %d.%d\n", pstatus->api_major, pstatus->api_minor);
+	device_printf(sc->dev, "	State: %d\n", pstatus->state);
+	device_printf(sc->dev, "	Guests: %d\n", pstatus->guest_count);
 
 	sev_shutdown(sc);
-	error = sev_get_platform_status(sc);
+	error = sev_get_platform_status(sc, pstatus);
 	if (error != 0) {
 		device_printf(dev, "%s: Failed to get SEV platform status\n", __func__);
 		goto fail;
 	}
+	device_printf(sc->dev, "SEV status:\n");
+	device_printf(sc->dev, "	API version: %d.%d\n", pstatus->api_major, pstatus->api_minor);
+	device_printf(sc->dev, "	State: %d\n", pstatus->state);
+	device_printf(sc->dev, "	Guests: %d\n", pstatus->guest_count);
 
 fail:
 	if (error != 0) {
@@ -423,14 +438,12 @@ sev_shutdown(struct asp_softc *sc)
 	int error;
 
 	error = asp_send_cmd(sc, SEV_CMD_SHUTDOWN, 0x0);
-	if (error)
-		return (error);
 
-	return (0);
+	return (error);
 }
 
 int
-sev_get_platform_status(struct asp_softc *sc)
+sev_get_platform_status(struct asp_softc *sc, struct sev_platform_status *pstatus)
 {
 	struct sev_platform_status *status_data;
 	int error;
@@ -441,18 +454,147 @@ sev_get_platform_status(struct asp_softc *sc)
 		return (ENOMEM);
 	}
 
-	device_printf(sc->dev, "Platform status physical address: 0x%lx\n", sc->cmd_paddr);
-
 	error = asp_send_cmd(sc, SEV_CMD_PLATFORM_STATUS, sc->cmd_paddr);
 	if (error)
 		return (error);
 
-	device_printf(sc->dev, "SEV status:\n");
-	device_printf(sc->dev, "	API version: %d.%d\n", status_data->api_major, status_data->api_minor);
-	device_printf(sc->dev, "	State: %d\n", status_data->state);
-	device_printf(sc->dev, "	Guests: %d\n", status_data->guest_count);
+	bcopy(status_data, pstatus, sizeof(struct sev_platform_status));
 	
 	return (0);
+}
+
+int
+sev_decommission(struct asp_softc *sc, struct sev_decommission *arg)
+{
+	struct sev_decommission *decom;
+	int error;
+
+	decom = (struct sev_decommission*)sc->cmd_kva;
+	bzero(decom, sizeof(struct sev_decommission));
+
+	decom->handle = arg->handle;
+
+	error = asp_send_cmd(sc, SEV_CMD_DECOMMISSION, sc->cmd_paddr);
+
+	return (error);
+}
+
+int
+sev_launch_start(struct asp_softc *sc, struct sev_launch_start *glaunch_start)
+{
+	struct sev_launch_start *launch_start;
+	int error;
+
+	launch_start = (struct sev_launch_start*)sc->cmd_kva;
+	bzero(launch_start, sizeof(struct sev_launch_start));
+
+	launch_start->handle = glaunch_start->handle;
+	launch_start->policy = glaunch_start->policy;
+
+	error = asp_send_cmd(sc, SEV_CMD_LAUNCH_START, sc->cmd_paddr);
+	if (error)
+		return (error);
+
+	/* If the HANDLE field is zero, a new VEK is generated for this guest. */
+	if (glaunch_start->handle == 0)
+		glaunch_start->handle = launch_start->handle;
+
+	return (0);
+}
+
+int
+sev_get_guest_status(struct asp_softc *sc, struct sev_guest_status *gstatus)
+{
+	struct sev_guest_status *status;
+	int error;
+
+	status = (struct sev_guest_status*)sc->cmd_kva;
+	bzero(status, sizeof(struct sev_guest_status));
+
+	error = asp_send_cmd(sc, SEV_CMD_GUEST_STATUS, sc->cmd_paddr);
+	if (error)
+		return (error);
+
+	bcopy(status, gstatus, sizeof(struct sev_guest_status));
+
+	return (0);
+}
+
+int
+sev_launch_update_data(struct asp_softc *sc, struct sev_launch_update_data *gludata)
+{
+	struct sev_launch_update_data *ludata;
+	int error;
+
+	ludata = (struct sev_launch_update_data*)sc->cmd_kva;
+	bzero(ludata, sizeof(struct sev_launch_update_data));
+	error = asp_send_cmd(sc, SEV_CMD_LAUNCH_UPDATE_DATA, sc->cmd_paddr);
+
+	return (error);
+}
+
+int
+sev_launch_update_vmsa(struct asp_softc *sc)
+{
+
+}
+
+int
+sev_launch_finish(struct asp_softc *sc, struct sev_launch_finish *gfinish)
+{
+	struct sev_launch_finish *finish;
+	int error;
+
+	finish = (struct sev_launch_finish*)sc->cmd_kva;
+	bzero(finish, sizeof(struct sev_launch_finish));
+	
+	finish->handle = gfinish->handle;
+	
+	error = asp_send_cmd(sc, SEV_CMD_LAUNCH_FINISH, sc->cmd_paddr);
+
+	return (error);
+
+}
+
+int
+sev_activate(struct asp_softc *sc, struct sev_activate *gactivate)
+{
+	struct sev_activate *activate;
+	int error;
+
+	activate = (struct sev_activate*)sc->cmd_kva;
+	bzero(activate, sizeof(struct sev_activate));
+	
+	activate->handle = gactivate->handle;
+	activate->asid = gactivate->asid;
+	
+	error = asp_send_cmd(sc, SEV_CMD_ACTIVATE, sc->cmd_paddr);
+
+	return (error);
+}
+
+int
+sev_deactivate(struct asp_softc *sc, struct sev_deactivate *gdeactivate)
+{
+	struct sev_deactivate *deactivate;
+	int error;
+
+	deactivate = (struct sev_deactivate*)sc->cmd_kva;
+	bzero(deactivate, sizeof(struct sev_deactivate));
+	
+	deactivate->handle = gdeactivate->handle;
+	
+	error = asp_send_cmd(sc, SEV_CMD_DEACTIVATE, sc->cmd_paddr);
+
+	return (error);
+}
+
+int
+asp_ioctl(device_t dev, u_long cmd)
+{
+	switch (cmd) {
+	
+	}
 }
 
 static device_method_t asp_methods[] = {
