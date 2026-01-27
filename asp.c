@@ -68,16 +68,15 @@ struct pciid {
 	{ 0x00000000, NULL }
 };
 static int asp_detach(device_t dev);
-int sev_init(struct asp_softc *sc);
-int sev_shutdown(struct asp_softc *sc);
-int sev_get_platform_status(struct asp_softc *sc, struct sev_platform_status *pstatus);
-int sev_decommission(struct asp_softc *sc, struct sev_decommission *arg);
-int sev_launch_start(struct asp_softc *sc, struct sev_launch_start *gstatus);
-int sev_get_guest_status(struct asp_softc *sc, struct sev_guest_status *gstatus);
-int sev_launch_update_data(struct asp_softc *sc, struct sev_launch_update_data *gludata);
-int sev_launch_finish(struct asp_softc *sc, struct sev_launch_finish *gfinish);
-int sev_activate(struct asp_softc *sc, struct sev_activate *gactivate);
-int sev_deactivate(struct asp_softc *sc, struct sev_deactivate *gdeactivate);
+int sev_platform_init(struct asp_softc *sc);
+int sev_platform_shutdown(struct asp_softc *sc);
+int sev_platform_get_status(struct asp_softc *sc, struct sev_platform_status *pstatus);
+int sev_guest_launch_start(struct asp_softc *sc, struct sev_launch_start *gstatus);
+int sev_guest_get_status(struct asp_softc *sc, struct sev_guest_status *gstatus);
+int sev_guest_launch_update_data(struct asp_softc *sc, struct sev_launch_update_data *gludata);
+int sev_guest_launch_finish(struct asp_softc *sc, struct sev_launch_finish *gfinish);
+int sev_guest_activate(struct asp_softc *sc, struct sev_activate *gactivate);
+int sev_guest_shutdown(struct asp_softc *sc);
 
 static int
 asp_probe(device_t dev)
@@ -271,11 +270,11 @@ asp_attach(device_t dev)
 	/* Enable ASP interrupt */
 	bus_write_4(sc->pci_resource, sc->reg_inten, -1);
 
-	error = sev_init(sc);
+	error = sev_platform_init(sc);
 
 	/* Test for get SEV platform status */
 	struct sev_platform_status *pstatus = NULL;
-	error = sev_get_platform_status(sc, pstatus);
+	error = sev_platform_get_status(sc, pstatus);
 	if (error != 0) {
 		device_printf(dev, "%s: Failed to get SEV platform status\n", __func__);
 		goto fail;
@@ -285,8 +284,8 @@ asp_attach(device_t dev)
 	device_printf(sc->dev, "	State: %d\n", pstatus->state);
 	device_printf(sc->dev, "	Guests: %d\n", pstatus->guest_count);
 
-	sev_shutdown(sc);
-	error = sev_get_platform_status(sc, pstatus);
+	sev_platform_shutdown(sc);
+	error = sev_platform_get_status(sc, pstatus);
 	if (error != 0) {
 		device_printf(dev, "%s: Failed to get SEV platform status\n", __func__);
 		goto fail;
@@ -409,7 +408,7 @@ asp_send_cmd(struct asp_softc *sc, uint32_t cmd, uint64_t paddr)
 }
 
 int
-sev_init(struct asp_softc *sc)
+sev_platform_init(struct asp_softc *sc)
 {
 	struct sev_init *init;
 	int error;
@@ -433,7 +432,7 @@ sev_init(struct asp_softc *sc)
 }
 
 int
-sev_shutdown(struct asp_softc *sc)
+sev_platform_shutdown(struct asp_softc *sc)
 {
 	int error;
 
@@ -443,7 +442,7 @@ sev_shutdown(struct asp_softc *sc)
 }
 
 int
-sev_get_platform_status(struct asp_softc *sc, struct sev_platform_status *pstatus)
+sev_platform_get_status(struct asp_softc *sc, struct sev_platform_status *pstatus)
 {
 	struct sev_platform_status *status_data;
 	int error;
@@ -464,23 +463,7 @@ sev_get_platform_status(struct asp_softc *sc, struct sev_platform_status *pstatu
 }
 
 int
-sev_decommission(struct asp_softc *sc, struct sev_decommission *arg)
-{
-	struct sev_decommission *decom;
-	int error;
-
-	decom = (struct sev_decommission*)sc->cmd_kva;
-	bzero(decom, sizeof(struct sev_decommission));
-
-	decom->handle = arg->handle;
-
-	error = asp_send_cmd(sc, SEV_CMD_DECOMMISSION, sc->cmd_paddr);
-
-	return (error);
-}
-
-int
-sev_launch_start(struct asp_softc *sc, struct sev_launch_start *glaunch_start)
+sev_guest_launch_start(struct asp_softc *sc, struct sev_launch_start *glaunch_start)
 {
 	struct sev_launch_start *launch_start;
 	int error;
@@ -503,7 +486,7 @@ sev_launch_start(struct asp_softc *sc, struct sev_launch_start *glaunch_start)
 }
 
 int
-sev_get_guest_status(struct asp_softc *sc, struct sev_guest_status *gstatus)
+sev_guest_get_status(struct asp_softc *sc, struct sev_guest_status *gstatus)
 {
 	struct sev_guest_status *status;
 	int error;
@@ -521,7 +504,7 @@ sev_get_guest_status(struct asp_softc *sc, struct sev_guest_status *gstatus)
 }
 
 int
-sev_launch_update_data(struct asp_softc *sc, struct sev_launch_update_data *gludata)
+sev_guest_launch_update_data(struct asp_softc *sc, struct sev_launch_update_data *gludata)
 {
 	struct sev_launch_update_data *ludata;
 	int error;
@@ -534,13 +517,21 @@ sev_launch_update_data(struct asp_softc *sc, struct sev_launch_update_data *glud
 }
 
 int
-sev_launch_update_vmsa(struct asp_softc *sc)
+sev_guest_launch_update_vmsa(struct asp_softc *sc, struct sev_launch_update_vmsa *gluvmsa)
 {
+	struct sev_launch_update_vmsa *luvmsa;
+	int error;
 
+	luvmsa = (struct sev_launch_update_vmsa*)sc->cmd_kva;
+	bzero(luvmsa, sizeof(struct sev_launch_update_vmsa));
+
+	error = asp_send_cmd(sc, SEV_CMD_LAUNCH_UPDATE, sc->cmd_paddr);
+
+	return (error);
 }
 
 int
-sev_launch_finish(struct asp_softc *sc, struct sev_launch_finish *gfinish)
+sev_guest_launch_finish(struct asp_softc *sc, struct sev_launch_finish *gfinish)
 {
 	struct sev_launch_finish *finish;
 	int error;
@@ -553,11 +544,10 @@ sev_launch_finish(struct asp_softc *sc, struct sev_launch_finish *gfinish)
 	error = asp_send_cmd(sc, SEV_CMD_LAUNCH_FINISH, sc->cmd_paddr);
 
 	return (error);
-
 }
 
 int
-sev_activate(struct asp_softc *sc, struct sev_activate *gactivate)
+sev_guest_activate(struct asp_softc *sc, struct sev_activate *gactivate)
 {
 	struct sev_activate *activate;
 	int error;
@@ -573,8 +563,8 @@ sev_activate(struct asp_softc *sc, struct sev_activate *gactivate)
 	return (error);
 }
 
-int
-sev_deactivate(struct asp_softc *sc, struct sev_deactivate *gdeactivate)
+static int
+sev_guest_deactivate(struct asp_softc *sc, struct sev_deactivate *gdeactivate)
 {
 	struct sev_deactivate *deactivate;
 	int error;
@@ -587,6 +577,28 @@ sev_deactivate(struct asp_softc *sc, struct sev_deactivate *gdeactivate)
 	error = asp_send_cmd(sc, SEV_CMD_DEACTIVATE, sc->cmd_paddr);
 
 	return (error);
+}
+
+static int
+sev_guest_decommission(struct asp_softc *sc, struct sev_decommission *arg)
+{
+	struct sev_decommission *decom;
+	int error;
+
+	decom = (struct sev_decommission*)sc->cmd_kva;
+	bzero(decom, sizeof(struct sev_decommission));
+
+	decom->handle = arg->handle;
+
+	error = asp_send_cmd(sc, SEV_CMD_DECOMMISSION, sc->cmd_paddr);
+
+	return (error);
+}
+
+int
+sev_guest_shutdown(struct asp_softc *sc)
+{
+
 }
 
 int
