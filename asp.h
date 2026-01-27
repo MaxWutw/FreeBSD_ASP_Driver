@@ -63,16 +63,16 @@ struct sev_platform_status {
 	uint32_t 	guest_count;	/* Out */
 } __packed;
 
-struct sev_decommission {
-	uint32_t handle;	/* In */
-} __packed;
-
 struct sev_activate {
 	uint32_t handle;	/* In */
 	uint32_t asid;		/* In */
 } __packed;
 
 struct sev_deactivate {
+	uint32_t handle;	/* In */
+} __packed;
+
+struct sev_decommission {
 	uint32_t handle;	/* In */
 } __packed;
 
@@ -126,4 +126,8 @@ struct sev_attestation {
 	uint64_t paddr;			/* In */
 	uint8_t mnounce[16];	/* In */
 	uint32_t length;		/* In/Out */
+} __packed;
+
+struct sev_guest_shutdown_arg {
+	uint32_t handle;
 } __packed;

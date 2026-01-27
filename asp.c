@@ -74,9 +74,10 @@ int sev_platform_get_status(struct asp_softc *sc, struct sev_platform_status *ps
 int sev_guest_launch_start(struct asp_softc *sc, struct sev_launch_start *gstatus);
 int sev_guest_get_status(struct asp_softc *sc, struct sev_guest_status *gstatus);
 int sev_guest_launch_update_data(struct asp_softc *sc, struct sev_launch_update_data *gludata);
+int sev_guest_launch_update_vmsa(struct asp_softc *sc, struct sev_launch_update_vmsa *gluvmsa);
 int sev_guest_launch_finish(struct asp_softc *sc, struct sev_launch_finish *gfinish);
 int sev_guest_activate(struct asp_softc *sc, struct sev_activate *gactivate);
-int sev_guest_shutdown(struct asp_softc *sc);
+int sev_guest_shutdown(struct asp_softc *sc, struct sev_guest_shutdown_arg *arg);
 
 static int
 asp_probe(device_t dev)
@@ -525,7 +526,11 @@ sev_guest_launch_update_vmsa(struct asp_softc *sc, struct sev_launch_update_vmsa
 	luvmsa = (struct sev_launch_update_vmsa*)sc->cmd_kva;
 	bzero(luvmsa, sizeof(struct sev_launch_update_vmsa));
 
-	error = asp_send_cmd(sc, SEV_CMD_LAUNCH_UPDATE, sc->cmd_paddr);
+	luvmsa->handle = gluvmsa->handle;
+	luvmsa->paddr = gluvmsa->paddr;
+	luvmsa->length = gluvmsa->length;
+
+	error = asp_send_cmd(sc, SEV_CMD_LAUNCH_UPDATE_VMSA, sc->cmd_paddr);
 
 	return (error);
 }
@@ -564,6 +569,21 @@ sev_guest_activate(struct asp_softc *sc, struct sev_activate *gactivate)
 }
 
 static int
+sev_guest_df_flush(struct asp_softc *sc)
+{
+	int error;
+
+	/* 
+	 * The x86 system software must execute WBINVD 
+	 * before invoking the DF_FLUSH command.	
+	 */
+
+	error = asp_send_cmd(sc, SEV_CMD_DF_FLUSH, 0x0);
+	
+	return (error);
+}
+
+static int
 sev_guest_deactivate(struct asp_softc *sc, struct sev_deactivate *gdeactivate)
 {
 	struct sev_deactivate *deactivate;
@@ -596,17 +616,29 @@ sev_guest_decommission(struct asp_softc *sc, struct sev_decommission *arg)
 }
 
 int
-sev_guest_shutdown(struct asp_softc *sc)
+sev_guest_shutdown(struct asp_softc *sc, struct sev_guest_shutdown_arg *arg)
 {
-
-}
-
-int
-asp_ioctl(device_t dev, u_long cmd)
-{
-	switch (cmd) {
+	struct sev_deactivate deactivate;
+	struct sev_decommission decom;
+	int error;
 	
-	}
+	bzero(&deactivate, sizeof(struct sev_deactivate));
+	deactivate.handle = arg->handle;
+	error = sev_guest_deactivate(sc, &deactivate);
+	if (error)
+		return  (error);
+
+	error = sev_guest_df_flush(sc);
+	if (error)
+		return  (error);
+
+	bzero(&decom, sizeof(struct sev_decommission));
+	decom.handle = arg->handle;
+	error = sev_guest_decommission(sc, &decom);
+	if (error)
+		return  (error);
+
+	return (0);
 }
 
 static device_method_t asp_methods[] = {
