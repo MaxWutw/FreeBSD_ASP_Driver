@@ -236,7 +236,6 @@ asp_attach(device_t dev)
 		goto fail;
 	}
 
-
 	/* Allocate DMA for command buffer */
 	error = bus_dma_tag_create(sc->parent_dma_tag,
 			PAGE_SIZE,
@@ -274,27 +273,27 @@ asp_attach(device_t dev)
 	error = sev_platform_init(sc);
 
 	/* Test for get SEV platform status */
-	struct sev_platform_status *pstatus = NULL;
-	error = sev_platform_get_status(sc, pstatus);
+	struct sev_platform_status pstatus;
+	error = sev_platform_get_status(sc, &pstatus);
 	if (error != 0) {
 		device_printf(dev, "%s: Failed to get SEV platform status\n", __func__);
 		goto fail;
 	}
 	device_printf(sc->dev, "SEV status:\n");
-	device_printf(sc->dev, "	API version: %d.%d\n", pstatus->api_major, pstatus->api_minor);
-	device_printf(sc->dev, "	State: %d\n", pstatus->state);
-	device_printf(sc->dev, "	Guests: %d\n", pstatus->guest_count);
+	device_printf(sc->dev, "	API version: %d.%d\n", pstatus.api_major, pstatus.api_minor);
+	device_printf(sc->dev, "	State: %d\n", pstatus.state);
+	device_printf(sc->dev, "	Guests: %d\n", pstatus.guest_count);
 
 	sev_platform_shutdown(sc);
-	error = sev_platform_get_status(sc, pstatus);
+	error = sev_platform_get_status(sc, &pstatus);
 	if (error != 0) {
 		device_printf(dev, "%s: Failed to get SEV platform status\n", __func__);
 		goto fail;
 	}
 	device_printf(sc->dev, "SEV status:\n");
-	device_printf(sc->dev, "	API version: %d.%d\n", pstatus->api_major, pstatus->api_minor);
-	device_printf(sc->dev, "	State: %d\n", pstatus->state);
-	device_printf(sc->dev, "	Guests: %d\n", pstatus->guest_count);
+	device_printf(sc->dev, "	API version: %d.%d\n", pstatus.api_major, pstatus.api_minor);
+	device_printf(sc->dev, "	State: %d\n", pstatus.state);
+	device_printf(sc->dev, "	Guests: %d\n", pstatus.guest_count);
 
 fail:
 	if (error != 0) {
@@ -355,18 +354,16 @@ asp_wait(struct asp_softc *sc, uint32_t *status, int poll)
 			timeout--;
 		}
 
-		if (timeout == 0) {
-			device_printf(sc->dev, "ASP Command Timeout!\n");
+		if (timeout == 0)
 			return (ETIMEDOUT);
-		}
 	}
+
 	error = msleep(sc, &sc->mtx_lock, PWAIT, "asp", 2 * hz);
 	if (error)
 		return (error);
 
 	*status = bus_read_4(sc->pci_resource, sc->reg_cmdresp);
 	device_printf(sc->dev, "ASP Command finished. Result: 0x%x\n", *status);
-	device_printf(sc->dev, "Timeout left: %d\n", timeout);
 	
 	return (0);
 }
