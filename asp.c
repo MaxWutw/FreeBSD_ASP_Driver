@@ -384,15 +384,12 @@ asp_send_cmd(struct asp_softc *sc, uint32_t cmd, uint64_t paddr)
 	if (!cold)
 		cmd_id |= ASP_CMDRESP_IOC;
 
-	mtx_lock(&sc->mtx_lock);
-
 	bus_write_4(sc->pci_resource, sc->reg_addr_lo, paddr_lo);
 	bus_write_4(sc->pci_resource, sc->reg_addr_hi, paddr_hi);
 	bus_write_4(sc->pci_resource, sc->reg_cmdresp, cmd_id);
 
 	error = asp_wait(sc, &status, cold);
 
-	mtx_unlock(&sc->mtx_lock);
 	if (error)
 		return (error);
 
@@ -411,6 +408,8 @@ sev_platform_init(struct asp_softc *sc)
 	struct sev_init *init;
 	int error;
 
+	mtx_lock(&sc->mtx_lock);
+
 	init = (struct sev_init *)sc->cmd_kva;
 	if (init == NULL) {
 		return (ENOMEM);
@@ -421,6 +420,9 @@ sev_platform_init(struct asp_softc *sc)
 	device_printf(sc->dev, "SEV init physical address: 0x%lx\n", sc->cmd_paddr);
 
 	error = asp_send_cmd(sc, SEV_CMD_INIT, sc->cmd_paddr);
+
+	mtx_unlock(&sc->mtx_lock);
+
 	if (error)
 		return (error);
 
@@ -433,8 +435,13 @@ int
 sev_platform_shutdown(struct asp_softc *sc)
 {
 	int error;
+	
+	mtx_lock(&sc->mtx_lock);
 
 	error = asp_send_cmd(sc, SEV_CMD_SHUTDOWN, 0x0);
+
+	mtx_unlock(&sc->mtx_lock);
+
 
 	return (error);
 }
@@ -445,6 +452,8 @@ sev_platform_get_status(struct asp_softc *sc, struct sev_platform_status *pstatu
 	struct sev_platform_status *status_data;
 	int error;
 
+	mtx_lock(&sc->mtx_lock);
+
 	status_data = (struct sev_platform_status*)sc->cmd_kva;
 	bzero(status_data, sizeof(struct sev_platform_status));
 	if (status_data == NULL) {
@@ -452,6 +461,9 @@ sev_platform_get_status(struct asp_softc *sc, struct sev_platform_status *pstatu
 	}
 
 	error = asp_send_cmd(sc, SEV_CMD_PLATFORM_STATUS, sc->cmd_paddr);
+
+	mtx_unlock(&sc->mtx_lock);
+
 	if (error)
 		return (error);
 
@@ -466,6 +478,8 @@ sev_guest_launch_start(struct asp_softc *sc, struct sev_launch_start *glaunch_st
 	struct sev_launch_start *launch_start;
 	int error;
 
+	mtx_lock(&sc->mtx_lock);
+
 	launch_start = (struct sev_launch_start*)sc->cmd_kva;
 	bzero(launch_start, sizeof(struct sev_launch_start));
 
@@ -473,6 +487,9 @@ sev_guest_launch_start(struct asp_softc *sc, struct sev_launch_start *glaunch_st
 	launch_start->policy = glaunch_start->policy;
 
 	error = asp_send_cmd(sc, SEV_CMD_LAUNCH_START, sc->cmd_paddr);
+
+	mtx_unlock(&sc->mtx_lock);
+
 	if (error)
 		return (error);
 
@@ -489,10 +506,15 @@ sev_guest_get_status(struct asp_softc *sc, struct sev_guest_status *gstatus)
 	struct sev_guest_status *status;
 	int error;
 
+	mtx_lock(&sc->mtx_lock);
+
 	status = (struct sev_guest_status*)sc->cmd_kva;
 	bzero(status, sizeof(struct sev_guest_status));
 
 	error = asp_send_cmd(sc, SEV_CMD_GUEST_STATUS, sc->cmd_paddr);
+	
+	mtx_unlock(&sc->mtx_lock);
+
 	if (error)
 		return (error);
 
@@ -507,9 +529,13 @@ sev_guest_launch_update_data(struct asp_softc *sc, struct sev_launch_update_data
 	struct sev_launch_update_data *ludata;
 	int error;
 
+	mtx_lock(&sc->mtx_lock);
+
 	ludata = (struct sev_launch_update_data*)sc->cmd_kva;
 	bzero(ludata, sizeof(struct sev_launch_update_data));
 	error = asp_send_cmd(sc, SEV_CMD_LAUNCH_UPDATE_DATA, sc->cmd_paddr);
+
+	mtx_unlock(&sc->mtx_lock);
 
 	return (error);
 }
@@ -520,6 +546,8 @@ sev_guest_launch_update_vmsa(struct asp_softc *sc, struct sev_launch_update_vmsa
 	struct sev_launch_update_vmsa *luvmsa;
 	int error;
 
+	mtx_lock(&sc->mtx_lock);
+
 	luvmsa = (struct sev_launch_update_vmsa*)sc->cmd_kva;
 	bzero(luvmsa, sizeof(struct sev_launch_update_vmsa));
 
@@ -528,6 +556,8 @@ sev_guest_launch_update_vmsa(struct asp_softc *sc, struct sev_launch_update_vmsa
 	luvmsa->length = gluvmsa->length;
 
 	error = asp_send_cmd(sc, SEV_CMD_LAUNCH_UPDATE_VMSA, sc->cmd_paddr);
+
+	mtx_unlock(&sc->mtx_lock);
 
 	return (error);
 }
@@ -538,12 +568,16 @@ sev_guest_launch_finish(struct asp_softc *sc, struct sev_launch_finish *gfinish)
 	struct sev_launch_finish *finish;
 	int error;
 
+	mtx_lock(&sc->mtx_lock);
+
 	finish = (struct sev_launch_finish*)sc->cmd_kva;
 	bzero(finish, sizeof(struct sev_launch_finish));
 	
 	finish->handle = gfinish->handle;
 	
 	error = asp_send_cmd(sc, SEV_CMD_LAUNCH_FINISH, sc->cmd_paddr);
+
+	mtx_unlock(&sc->mtx_lock);
 
 	return (error);
 }
@@ -554,6 +588,8 @@ sev_guest_activate(struct asp_softc *sc, struct sev_activate *gactivate)
 	struct sev_activate *activate;
 	int error;
 
+	mtx_lock(&sc->mtx_lock);
+
 	activate = (struct sev_activate*)sc->cmd_kva;
 	bzero(activate, sizeof(struct sev_activate));
 	
@@ -561,6 +597,8 @@ sev_guest_activate(struct asp_softc *sc, struct sev_activate *gactivate)
 	activate->asid = gactivate->asid;
 	
 	error = asp_send_cmd(sc, SEV_CMD_ACTIVATE, sc->cmd_paddr);
+
+	mtx_unlock(&sc->mtx_lock);
 
 	return (error);
 }
@@ -575,8 +613,12 @@ sev_guest_df_flush(struct asp_softc *sc)
 	 * before invoking the DF_FLUSH command.	
 	 */
 
+	mtx_lock(&sc->mtx_lock);
+
 	error = asp_send_cmd(sc, SEV_CMD_DF_FLUSH, 0x0);
 	
+	mtx_unlock(&sc->mtx_lock);
+
 	return (error);
 }
 
@@ -586,12 +628,16 @@ sev_guest_deactivate(struct asp_softc *sc, struct sev_deactivate *gdeactivate)
 	struct sev_deactivate *deactivate;
 	int error;
 
+	mtx_lock(&sc->mtx_lock);
+
 	deactivate = (struct sev_deactivate*)sc->cmd_kva;
 	bzero(deactivate, sizeof(struct sev_deactivate));
 	
 	deactivate->handle = gdeactivate->handle;
 	
 	error = asp_send_cmd(sc, SEV_CMD_DEACTIVATE, sc->cmd_paddr);
+	mtx_unlock(&sc->mtx_lock);
+
 
 	return (error);
 }
@@ -602,12 +648,16 @@ sev_guest_decommission(struct asp_softc *sc, struct sev_decommission *arg)
 	struct sev_decommission *decom;
 	int error;
 
+	mtx_lock(&sc->mtx_lock);
+
 	decom = (struct sev_decommission*)sc->cmd_kva;
 	bzero(decom, sizeof(struct sev_decommission));
 
 	decom->handle = arg->handle;
 
 	error = asp_send_cmd(sc, SEV_CMD_DECOMMISSION, sc->cmd_paddr);
+
+	mtx_unlock(&sc->mtx_lock);
 
 	return (error);
 }
