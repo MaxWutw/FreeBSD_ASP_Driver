@@ -128,6 +128,6 @@ struct sev_attestation {
 	uint32_t length;		/* In/Out */
 } __packed;
 
-struct sev_guest_shutdown_arg {
+struct sev_guest_shutdown_args {
 	uint32_t handle;
 } __packed;

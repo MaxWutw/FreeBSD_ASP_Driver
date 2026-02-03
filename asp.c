@@ -70,14 +70,14 @@ struct pciid {
 static int asp_detach(device_t dev);
 int sev_platform_init(struct asp_softc *sc);
 int sev_platform_shutdown(struct asp_softc *sc);
-int sev_platform_get_status(struct asp_softc *sc, struct sev_platform_status *pstatus);
+int sev_platform_status(struct asp_softc *sc, struct sev_platform_status *pstatus);
 int sev_guest_launch_start(struct asp_softc *sc, struct sev_launch_start *gstatus);
-int sev_guest_get_status(struct asp_softc *sc, struct sev_guest_status *gstatus);
+int sev_guest_status(struct asp_softc *sc, struct sev_guest_status *gstatus);
 int sev_guest_launch_update_data(struct asp_softc *sc, struct sev_launch_update_data *gludata);
 int sev_guest_launch_update_vmsa(struct asp_softc *sc, struct sev_launch_update_vmsa *gluvmsa);
 int sev_guest_launch_finish(struct asp_softc *sc, struct sev_launch_finish *gfinish);
 int sev_guest_activate(struct asp_softc *sc, struct sev_activate *gactivate);
-int sev_guest_shutdown(struct asp_softc *sc, struct sev_guest_shutdown_arg *arg);
+int sev_guest_shutdown(struct asp_softc *sc, struct sev_guest_shutdown_args *args);
 
 static int
 asp_probe(device_t dev)
@@ -274,7 +274,7 @@ asp_attach(device_t dev)
 
 	/* Test for get SEV platform status */
 	struct sev_platform_status pstatus;
-	error = sev_platform_get_status(sc, &pstatus);
+	error = sev_platform_status(sc, &pstatus);
 	if (error != 0) {
 		device_printf(dev, "%s: Failed to get SEV platform status\n", __func__);
 		goto fail;
@@ -285,7 +285,7 @@ asp_attach(device_t dev)
 	device_printf(sc->dev, "	Guests: %d\n", pstatus.guest_count);
 
 	sev_platform_shutdown(sc);
-	error = sev_platform_get_status(sc, &pstatus);
+	error = sev_platform_status(sc, &pstatus);
 	if (error != 0) {
 		device_printf(dev, "%s: Failed to get SEV platform status\n", __func__);
 		goto fail;
@@ -447,7 +447,7 @@ sev_platform_shutdown(struct asp_softc *sc)
 }
 
 int
-sev_platform_get_status(struct asp_softc *sc, struct sev_platform_status *pstatus)
+sev_platform_status(struct asp_softc *sc, struct sev_platform_status *pstatus)
 {
 	struct sev_platform_status *status_data;
 	int error;
@@ -501,7 +501,7 @@ sev_guest_launch_start(struct asp_softc *sc, struct sev_launch_start *glaunch_st
 }
 
 int
-sev_guest_get_status(struct asp_softc *sc, struct sev_guest_status *gstatus)
+sev_guest_status(struct asp_softc *sc, struct sev_guest_status *gstatus)
 {
 	struct sev_guest_status *status;
 	int error;
@@ -663,14 +663,14 @@ sev_guest_decommission(struct asp_softc *sc, struct sev_decommission *arg)
 }
 
 int
-sev_guest_shutdown(struct asp_softc *sc, struct sev_guest_shutdown_arg *arg)
+sev_guest_shutdown(struct asp_softc *sc, struct sev_guest_shutdown_args *args)
 {
 	struct sev_deactivate deactivate;
 	struct sev_decommission decom;
 	int error;
 	
 	bzero(&deactivate, sizeof(struct sev_deactivate));
-	deactivate.handle = arg->handle;
+	deactivate.handle = args->handle;
 	error = sev_guest_deactivate(sc, &deactivate);
 	if (error)
 		return  (error);
@@ -680,7 +680,7 @@ sev_guest_shutdown(struct asp_softc *sc, struct sev_guest_shutdown_arg *arg)
 		return  (error);
 
 	bzero(&decom, sizeof(struct sev_decommission));
-	decom.handle = arg->handle;
+	decom.handle = args->handle;
 	error = sev_guest_decommission(sc, &decom);
 	if (error)
 		return  (error);
