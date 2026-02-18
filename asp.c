@@ -15,50 +15,10 @@
 #include <machine/resource.h>
 
 #include "asp.h"
+#include "sev.h"
 
-struct asp_softc {
-	device_t dev;
-	bool detaching;
-	int32_t cmd_size;
-
-	/* Primary BAR (RID 2) used for register access */
-	struct resource 	*pci_resource;
-	int32_t 			pci_resource_id;
-	bus_space_tag_t 	pci_bus_tag;
-	bus_space_handle_t 	pci_bus_handle;
-
-	/* Secondary BAR (RID 5) apparently used for MSI-X */
-	int	pci_resource_id_msix;
-	struct resource *pci_resource_msix;
-	int	 irq_rid;
-	struct resource *irq_res;
-	void *irq_tag;
-
-	/* ASP register */
-	bus_size_t		reg_cmdresp;
-	bus_size_t		reg_addr_lo;
-	bus_size_t		reg_addr_hi;
-	bus_size_t		reg_inten;
-	bus_size_t		reg_intsts;
-
-	/* DMA Resources */
-	bus_dma_tag_t 	parent_dma_tag;
-	bus_dma_tag_t 	cmd_dma_tag;
-	bus_dmamap_t 	cmd_dma_map;
-	void			*cmd_kva;
-	bus_addr_t		cmd_paddr;
-
-	/* TMR Resources, currently disabled */
-	/*
-	size_t			tmr_size;
-	bus_dma_tag_t 	tmr_dma_tag;
-	bus_dmamap_t 	tmr_dma_map;
-	void			*tmr_kva;
-	bus_addr_t		tmr_paddr;
-	*/
-
-	struct mtx mtx_lock;
-};
+struct sev_ops *sevops = NULL;
+static struct asp_softc *g_asp_softc = NULL;
 
 struct pciid {
 	uint32_t devid;
@@ -67,7 +27,12 @@ struct pciid {
 	{ 0x14861022, "AMD Secure Processor (Milan)" },
 	{ 0x00000000, NULL }
 };
+static struct sev_ops asp_sev_ops_impl;
 static int asp_detach(device_t dev);
+static int asp_hw_platform_init(struct asp_softc *sc);
+static int asp_hw_platform_shutdown(struct asp_softc *sc);
+static int asp_hw_platform_status(struct asp_softc *sc, struct sev_platform_status *pstatus);
+/*
 int sev_platform_init(struct asp_softc *sc);
 int sev_platform_shutdown(struct asp_softc *sc);
 int sev_platform_status(struct asp_softc *sc, struct sev_platform_status *pstatus);
@@ -78,6 +43,7 @@ int sev_guest_launch_update_vmsa(struct asp_softc *sc, struct sev_launch_update_
 int sev_guest_launch_finish(struct asp_softc *sc, struct sev_launch_finish *gfinish);
 int sev_guest_activate(struct asp_softc *sc, struct sev_activate *gactivate);
 int sev_guest_shutdown(struct asp_softc *sc, struct sev_guest_shutdown_args *args);
+*/
 
 static int
 asp_probe(device_t dev)
@@ -270,11 +236,16 @@ asp_attach(device_t dev)
 	/* Enable ASP interrupt */
 	bus_write_4(sc->pci_resource, sc->reg_inten, -1);
 
-	error = sev_platform_init(sc);
+	if (g_asp_softc == NULL)
+		g_asp_softc = sc;
+
+	hook_sev_ops(&asp_sev_ops_impl);
+
+	error = asp_hw_platform_init(sc);
 
 	/* Test for get SEV platform status */
 	struct sev_platform_status pstatus;
-	error = sev_platform_status(sc, &pstatus);
+	error = asp_hw_platform_status(sc, &pstatus);
 	if (error != 0) {
 		device_printf(dev, "%s: Failed to get SEV platform status\n", __func__);
 		goto fail;
@@ -284,8 +255,8 @@ asp_attach(device_t dev)
 	device_printf(sc->dev, "	State: %d\n", pstatus.state);
 	device_printf(sc->dev, "	Guests: %d\n", pstatus.guest_count);
 
-	sev_platform_shutdown(sc);
-	error = sev_platform_status(sc, &pstatus);
+	asp_hw_platform_shutdown(sc);
+	error = asp_hw_platform_status(sc, &pstatus);
 	if (error != 0) {
 		device_printf(dev, "%s: Failed to get SEV platform status\n", __func__);
 		goto fail;
@@ -333,6 +304,11 @@ asp_detach(device_t dev)
 
 	if (sc->parent_dma_tag != 0)
 		bus_dma_tag_destroy(sc->parent_dma_tag);
+
+	if (g_asp_softc == sc)
+		g_asp_softc = NULL;
+
+	unhook_sev_ops();
 
 	mtx_destroy(&sc->mtx_lock);
 	
@@ -402,8 +378,8 @@ asp_send_cmd(struct asp_softc *sc, uint32_t cmd, uint64_t paddr)
 	return (0);
 }
 
-int
-sev_platform_init(struct asp_softc *sc)
+static int
+asp_hw_platform_init(struct asp_softc *sc)
 {
 	struct sev_init *init;
 	int error;
@@ -431,8 +407,8 @@ sev_platform_init(struct asp_softc *sc)
 	return (0);
 }
 
-int
-sev_platform_shutdown(struct asp_softc *sc)
+static int
+asp_hw_platform_shutdown(struct asp_softc *sc)
 {
 	int error;
 	
@@ -446,8 +422,8 @@ sev_platform_shutdown(struct asp_softc *sc)
 	return (error);
 }
 
-int
-sev_platform_status(struct asp_softc *sc, struct sev_platform_status *pstatus)
+static int
+asp_hw_platform_status(struct asp_softc *sc, struct sev_platform_status *pstatus)
 {
 	struct sev_platform_status *status_data;
 	int error;
@@ -472,8 +448,8 @@ sev_platform_status(struct asp_softc *sc, struct sev_platform_status *pstatus)
 	return (0);
 }
 
-int
-sev_guest_launch_start(struct asp_softc *sc, struct sev_launch_start *glaunch_start)
+static int
+asp_hw_guest_launch_start(struct asp_softc *sc, struct sev_launch_start *glaunch_start)
 {
 	struct sev_launch_start *launch_start;
 	int error;
@@ -500,8 +476,8 @@ sev_guest_launch_start(struct asp_softc *sc, struct sev_launch_start *glaunch_st
 	return (0);
 }
 
-int
-sev_guest_status(struct asp_softc *sc, struct sev_guest_status *gstatus)
+static int
+asp_hw_guest_status(struct asp_softc *sc, struct sev_guest_status *gstatus)
 {
 	struct sev_guest_status *status;
 	int error;
@@ -523,8 +499,8 @@ sev_guest_status(struct asp_softc *sc, struct sev_guest_status *gstatus)
 	return (0);
 }
 
-int
-sev_guest_launch_update_data(struct asp_softc *sc, struct sev_launch_update_data *gludata)
+static int
+asp_hw_guest_launch_update_data(struct asp_softc *sc, struct sev_launch_update_data *gludata)
 {
 	struct sev_launch_update_data *ludata;
 	int error;
@@ -540,8 +516,8 @@ sev_guest_launch_update_data(struct asp_softc *sc, struct sev_launch_update_data
 	return (error);
 }
 
-int
-sev_guest_launch_update_vmsa(struct asp_softc *sc, struct sev_launch_update_vmsa *gluvmsa)
+static int
+asp_hw_guest_launch_update_vmsa(struct asp_softc *sc, struct sev_launch_update_vmsa *gluvmsa)
 {
 	struct sev_launch_update_vmsa *luvmsa;
 	int error;
@@ -562,8 +538,8 @@ sev_guest_launch_update_vmsa(struct asp_softc *sc, struct sev_launch_update_vmsa
 	return (error);
 }
 
-int
-sev_guest_launch_finish(struct asp_softc *sc, struct sev_launch_finish *gfinish)
+static int
+asp_hw_guest_launch_finish(struct asp_softc *sc, struct sev_launch_finish *gfinish)
 {
 	struct sev_launch_finish *finish;
 	int error;
@@ -582,8 +558,8 @@ sev_guest_launch_finish(struct asp_softc *sc, struct sev_launch_finish *gfinish)
 	return (error);
 }
 
-int
-sev_guest_activate(struct asp_softc *sc, struct sev_activate *gactivate)
+static int
+asp_hw_guest_activate(struct asp_softc *sc, struct sev_activate *gactivate)
 {
 	struct sev_activate *activate;
 	int error;
@@ -604,7 +580,7 @@ sev_guest_activate(struct asp_softc *sc, struct sev_activate *gactivate)
 }
 
 static int
-sev_guest_df_flush(struct asp_softc *sc)
+asp_hw_guest_df_flush(struct asp_softc *sc)
 {
 	int error;
 
@@ -623,7 +599,7 @@ sev_guest_df_flush(struct asp_softc *sc)
 }
 
 static int
-sev_guest_deactivate(struct asp_softc *sc, struct sev_deactivate *gdeactivate)
+asp_hw_guest_deactivate(struct asp_softc *sc, struct sev_deactivate *gdeactivate)
 {
 	struct sev_deactivate *deactivate;
 	int error;
@@ -643,7 +619,7 @@ sev_guest_deactivate(struct asp_softc *sc, struct sev_deactivate *gdeactivate)
 }
 
 static int
-sev_guest_decommission(struct asp_softc *sc, struct sev_decommission *arg)
+asp_hw_guest_decommission(struct asp_softc *sc, struct sev_decommission *arg)
 {
 	struct sev_decommission *decom;
 	int error;
@@ -662,8 +638,8 @@ sev_guest_decommission(struct asp_softc *sc, struct sev_decommission *arg)
 	return (error);
 }
 
-int
-sev_guest_shutdown(struct asp_softc *sc, struct sev_guest_shutdown_args *args)
+static int
+asp_hw_guest_shutdown(struct asp_softc *sc, struct sev_guest_shutdown_args *args)
 {
 	struct sev_deactivate deactivate;
 	struct sev_decommission decom;
@@ -671,22 +647,93 @@ sev_guest_shutdown(struct asp_softc *sc, struct sev_guest_shutdown_args *args)
 	
 	bzero(&deactivate, sizeof(struct sev_deactivate));
 	deactivate.handle = args->handle;
-	error = sev_guest_deactivate(sc, &deactivate);
+	error = asp_hw_guest_deactivate(sc, &deactivate);
 	if (error)
 		return  (error);
 
-	error = sev_guest_df_flush(sc);
+	error = asp_hw_guest_df_flush(sc);
 	if (error)
 		return  (error);
 
 	bzero(&decom, sizeof(struct sev_decommission));
 	decom.handle = args->handle;
-	error = sev_guest_decommission(sc, &decom);
+	error = asp_hw_guest_decommission(sc, &decom);
 	if (error)
 		return  (error);
 
 	return (0);
 }
+
+static int
+sev_platform_init(void)
+{
+	if (g_asp_softc == NULL)
+		return (ENXIO);
+
+	return asp_hw_platform_init(g_asp_softc);
+}
+
+static int
+sev_platform_shutdown(void)
+{
+	if (g_asp_softc == NULL)
+		return (ENXIO);
+
+	return asp_hw_platform_shutdown(g_asp_softc);
+}
+
+static int
+sev_platform_status(struct sev_platform_status *pstatus)
+{
+	if (g_asp_softc == NULL)
+		return (ENXIO);
+	
+	return asp_hw_platform_status(g_asp_softc, pstatus);
+}
+
+/*
+static int
+sev_guest_launch_start()
+{
+
+}
+
+static int
+sev_guest_status()
+{
+
+}
+
+static int
+sev_guest_launch_update_data()
+{
+
+}
+
+static int
+sev_guest_launch_update_vmsa()
+{
+
+}
+
+static int
+sev_guest_launch_finish()
+{
+
+}
+
+static int
+sev_guest_launch_finish()
+{
+
+}
+
+static int
+sev_guest_shutdown()
+{
+
+}
+*/
 
 static device_method_t asp_methods[] = {
 	DEVMETHOD(device_probe, asp_probe),
@@ -700,6 +747,21 @@ static driver_t asp_driver = {
 	"asp",
 	asp_methods,
 	sizeof(struct asp_softc)
+};
+
+static struct sev_ops asp_sev_ops_impl = {
+	.platform_init = sev_platform_init,
+	.platform_shutdown = sev_platform_shutdown,
+	.platform_status = sev_platform_status,
+	/*
+	.guest_launch_start = ,
+	.guest_status = ,
+	.guest_launch_update_data = ,
+	.guest_launch_update_vmsa = ,
+	.guest_launch_finish = ,
+	.guest_activate = ,
+	.guest_shutdown = 
+	*/
 };
 
 DRIVER_MODULE(asp, pci, asp_driver, NULL, NULL);

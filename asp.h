@@ -46,88 +46,46 @@
 
 #define SEV_TMR_SIZE (1024 * 1024)
 
+struct asp_softc {
+	device_t dev;
+	bool detaching;
+	int32_t cmd_size;
 
-struct sev_init {
-	uint32_t enable_es; 	/* In */
-	uint32_t reserved;		/* - */
-	uint64_t tmr_paddr;		/* In */
-	uint32_t tmr_length;	/* In */
-} __packed;
+	/* Primary BAR (RID 2) used for register access */
+	struct resource 	*pci_resource;
+	int32_t 			pci_resource_id;
+	bus_space_tag_t 	pci_bus_tag;
+	bus_space_handle_t 	pci_bus_handle;
 
-struct sev_platform_status {
-	uint8_t 	api_major;		/* Out */
-	uint8_t 	api_minor;		/* Out */
-	uint8_t 	state;			/* Out */
-	uint8_t 	owner;			/* Out */
-	uint32_t 	cfges_build;	/* Out */
-	uint32_t 	guest_count;	/* Out */
-} __packed;
+	/* Secondary BAR (RID 5) apparently used for MSI-X */
+	int	pci_resource_id_msix;
+	struct resource *pci_resource_msix;
+	int	 irq_rid;
+	struct resource *irq_res;
+	void *irq_tag;
 
-struct sev_activate {
-	uint32_t handle;	/* In */
-	uint32_t asid;		/* In */
-} __packed;
+	/* ASP register */
+	bus_size_t		reg_cmdresp;
+	bus_size_t		reg_addr_lo;
+	bus_size_t		reg_addr_hi;
+	bus_size_t		reg_inten;
+	bus_size_t		reg_intsts;
 
-struct sev_deactivate {
-	uint32_t handle;	/* In */
-} __packed;
+	/* DMA Resources */
+	bus_dma_tag_t 	parent_dma_tag;
+	bus_dma_tag_t 	cmd_dma_tag;
+	bus_dmamap_t 	cmd_dma_map;
+	void			*cmd_kva;
+	bus_addr_t		cmd_paddr;
 
-struct sev_decommission {
-	uint32_t handle;	/* In */
-} __packed;
+	/* TMR Resources, currently disabled */
+	/*
+	size_t			tmr_size;
+	bus_dma_tag_t 	tmr_dma_tag;
+	bus_dmamap_t 	tmr_dma_map;
+	void			*tmr_kva;
+	bus_addr_t		tmr_paddr;
+	*/
 
-struct sev_guest_status {
-	uint32_t handle;	/* In  */
-	uint32_t policy;	/* Out */
-	uint32_t asid;		/* Out */
-	uint8_t  state;		/* Out */
-} __packed;
-
-struct sev_launch_start {
-	uint32_t handle;		/* In/Out */
-	uint32_t policy;		/* In */
-	uint64_t dh_cert_paddr; /* In */
-	uint32_t dh_cert_len;	/* In */
-	uint32_t reserved;		/* - */
-	uint64_t session_paddr; /* In */
-	uint32_t session_len;	/* In */
-} __packed;
-
-struct sev_launch_update_data {
-	uint32_t handle;	/* In */
-	uint32_t reserved;	/* - */
-	uint64_t paddr;		/* In */
-	uint32_t length;	/* In */
-} __packed;
-
-struct sev_launch_update_vmsa {
-	uint32_t handle;	/* In */
-	uint32_t reserved;	/* - */
-	uint64_t paddr;		/* In */
-	uint32_t length;	/* In */
-} __packed;
-
-struct sev_launch_measure {
-	uint32_t handle;			/* In */
-	uint32_t reserved;			/* - */
-	uint64_t measure_paddr;		/* In */
-	uint32_t measure_len;		/* In/Out */
-	uint8_t measure[32];		/* Out */
-	uint8_t measure_nonce[16];  /* Out */
-} __packed;
-
-struct sev_launch_finish {
-	uint32_t handle;	/* In */
-} __packed;
-
-struct sev_attestation {
-	uint32_t handle;		/* In */
-	uint32_t reserved;		/* - */
-	uint64_t paddr;			/* In */
-	uint8_t mnounce[16];	/* In */
-	uint32_t length;		/* In/Out */
-} __packed;
-
-struct sev_guest_shutdown_args {
-	uint32_t handle;
-} __packed;
+	struct mtx mtx_lock;
+};
