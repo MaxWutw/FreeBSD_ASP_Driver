@@ -678,7 +678,6 @@ sev_platform_shutdown(void)
 {
 	if (g_asp_softc == NULL)
 		return (ENXIO);
-
 	return asp_hw_platform_shutdown(g_asp_softc);
 }
 
@@ -687,53 +686,64 @@ sev_platform_status(struct sev_platform_status *pstatus)
 {
 	if (g_asp_softc == NULL)
 		return (ENXIO);
-	
 	return asp_hw_platform_status(g_asp_softc, pstatus);
 }
 
-/*
 static int
-sev_guest_launch_start()
+sev_guest_launch_start(struct sev_launch_start *glaunch_start)
 {
-
+	if (g_asp_softc == NULL)
+		return (ENXIO);
+	return asp_hw_guest_launch_start(g_asp_softc, glaunch_start);
 }
 
 static int
-sev_guest_status()
+sev_guest_activate(struct sev_activate *gactivate)
 {
-
+	if (g_asp_softc == NULL)
+		return (ENXIO);
+	return asp_hw_guest_activate(g_asp_softc, gactivate);
 }
 
 static int
-sev_guest_launch_update_data()
+sev_guest_status(struct sev_guest_status *gstatus)
 {
-
+	if (g_asp_softc == NULL)
+		return (ENXIO);
+	return asp_hw_guest_status(g_asp_softc, gstatus);
 }
 
 static int
-sev_guest_launch_update_vmsa()
+sev_guest_launch_update_data(struct sev_launch_update_data *glaunch_update_data)
 {
-
+	if (g_asp_softc == NULL)
+		return (ENXIO);
+	return asp_hw_guest_launch_update_data(g_asp_softc, glaunch_update_data);
 }
 
 static int
-sev_guest_launch_finish()
+sev_guest_launch_update_vmsa(struct sev_launch_update_vmsa *glaunch_update_vmsa)
 {
-
+	if (g_asp_softc == NULL)
+		return (ENXIO);
+	return asp_hw_guest_launch_update_vmsa(g_asp_softc, glaunch_update_vmsa);
 }
 
 static int
-sev_guest_launch_finish()
+sev_guest_launch_finish(struct sev_launch_finish *glaunch_finish)
 {
-
+	if (g_asp_softc == NULL)
+		return (ENXIO);
+	return asp_hw_guest_launch_finish(g_asp_softc, glaunch_finish);
 }
 
 static int
-sev_guest_shutdown()
+sev_guest_shutdown(struct sev_guest_shutdown_args *args)
 {
-
+	if (g_asp_softc == NULL)
+		return (ENXIO);
+	return asp_hw_guest_shutdown(g_asp_softc, args);
 }
-*/
 
 static device_method_t asp_methods[] = {
 	DEVMETHOD(device_probe, asp_probe),
@@ -753,15 +763,13 @@ static struct sev_ops asp_sev_ops_impl = {
 	.platform_init = sev_platform_init,
 	.platform_shutdown = sev_platform_shutdown,
 	.platform_status = sev_platform_status,
-	/*
-	.guest_launch_start = ,
-	.guest_status = ,
-	.guest_launch_update_data = ,
-	.guest_launch_update_vmsa = ,
-	.guest_launch_finish = ,
-	.guest_activate = ,
-	.guest_shutdown = 
-	*/
+	.guest_launch_start = sev_guest_launch_start,
+	.guest_activate = sev_guest_activate,
+	.guest_status = sev_guest_status,
+	.guest_launch_update_data = sev_guest_launch_update_data,
+	.guest_launch_update_vmsa = sev_guest_launch_update_vmsa,
+	.guest_launch_finish = sev_guest_launch_finish,
+	.guest_shutdown = sev_guest_shutdown
 };
 
 DRIVER_MODULE(asp, pci, asp_driver, NULL, NULL);

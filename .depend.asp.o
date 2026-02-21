@@ -31,4 +31,4 @@ asp.o: asp.c /home/max/ASP_Driver/opt_global.h /usr/src/sys/sys/param.h \
   /usr/src/sys/sys/rman.h machine/resource.h /usr/src/sys/sys/malloc.h \
   /usr/src/sys/dev/pci/pcireg.h /usr/src/sys/dev/pci/pcivar.h pci_if.h \
   machine/bus.h x86/bus.h machine/bus_dma.h x86/bus_dma.h \
-  /usr/src/sys/sys/bus_dma.h x86/busdma_impl.h asp.h
+  /usr/src/sys/sys/bus_dma.h x86/busdma_impl.h asp.h sev.h
